@@ -30,6 +30,8 @@ def main():
             p.add_argument("--run-dir", type=Path, required=True)
             p.add_argument("--total-steps", type=int)
             p.add_argument("--resume", type=Path)
+            p.add_argument("--video-interval-evaluations", type=int,
+                           help="Record one episode every N evaluations; 0 disables automatic videos")
         if name == "evaluate":
             p.add_argument("checkpoint", type=Path)
             p.add_argument("--episodes", type=int, default=20)
@@ -103,6 +105,8 @@ def main():
                     learning = replace(load_mappo_config(payload["learning"]), total_steps=args.total_steps)
                 elif args.total_steps is not None:
                     learning = replace(learning, total_steps=args.total_steps)
+                if args.video_interval_evaluations is not None:
+                    learning = replace(learning, video_interval_evaluations=args.video_interval_evaluations)
                 result = train(args.run_dir, config, sim, learning, args.resume)
         if args.json:
             write_json(args.json, result)

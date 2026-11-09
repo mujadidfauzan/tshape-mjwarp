@@ -7,7 +7,8 @@
     <!-- Small agents need finer contact integration during force exploration.
          Environment decisions still span 50 ms through frame_skip=50. -->
     <option timestep="0.001" gravity="0 0 0"
-            integrator="implicitfast" iterations="50"/>
+            integrator="implicitfast" iterations="50"
+            ccd_iterations="100"/>
 
     <default>
         <geom condim="3" friction="0.8 0 0"

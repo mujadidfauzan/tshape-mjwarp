@@ -13,7 +13,7 @@ from .training_config import load_mappo_config
 FORMAT = "tshape-mjwarp-mappo-v1"
 
 
-def save(path, agent, environment, simulation, steps, updates, best_score, generator):
+def save(path, agent, environment, simulation, steps, updates, best_score, generator, evaluations=0):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     xml = environment.oracle.model_xml
@@ -22,6 +22,7 @@ def save(path, agent, environment, simulation, steps, updates, best_score, gener
                    model_xml=xml, model_sha256=hashlib.sha256(xml.encode()).hexdigest(),
                    model=agent.state_dict(), actor_optimizer=agent.actor_optimizer.state_dict(),
                    critic_optimizer=agent.critic_optimizer.state_dict(), steps=steps, updates=updates,
+                   evaluations=evaluations,
                    best_score=list(best_score), spawn_rng=environment.sampler.rng,
                    minibatch_rng=generator.get_state(), torch_rng=torch.get_rng_state(),
                    cuda_rng=torch.cuda.get_rng_state(agent.device) if agent.device.type == "cuda" else None)

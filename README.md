@@ -193,6 +193,7 @@ not propagate across the reset into a new episode.
 │   ├── test_physics.py           # Non-finite substep rollback and path metrics
 │   ├── test_validation.py        # Validation inputs, stability, and termination
 │   ├── test_checkpoint.py        # Training, resume, evaluation, video, benchmark
+│   ├── test_training_progress.py # ETA, video cadence, HD output, resume compatibility
 │   ├── test_warp_cpu.py          # Optional MJWarp CPU integration tests
 │   └── test_gpu.py               # Optional CUDA integration tests
 ├── requirements.txt
@@ -366,7 +367,7 @@ supplied training YAML; its overrides, including logging settings, remain active
 The supplied training configuration evaluates 20 episodes and saves checkpoints
 at intervals of 10,000 team transitions, checked after each rollout/update, and
 at the end of training. Keep `tensorboard: false` and `video_interval_steps: 0`;
-training currently supports JSONL logging and manual evaluation videos.
+training logs JSONL and uses `video_interval_evaluations` for automatic videos.
 
 For a small CPU run, explicitly select the reference backend and fewer worlds:
 
@@ -377,6 +378,53 @@ For a small CPU run, explicitly select the reference backend and fewer worlds:
   --total-steps 128 \
   --run-dir runs/cpu_smoke
 ```
+
+### ETA and periodic Full HD videos
+
+Every completed update prints cumulative training throughput and estimated time
+remaining, for example:
+
+```text
+steps=327680/10485760 update=10 transitions/s=195.2 ETA=14:27:19
+```
+
+ETA uses the remaining team transitions divided by throughput measured since the
+current process started training. Timing includes completed evaluations, video
+encoding, and checkpoint writes. It excludes initialization and cannot predict
+future slowdowns; estimates can vary considerably before enough updates and
+evaluations have completed. On resume, only transitions collected in the resumed
+process are used to estimate speed. `updates.jsonl` also stores `eta_seconds`;
+the final completed update reports zero remaining time.
+
+The supplied YAML records the first episode of every **fifth evaluation** at
+**1920×1080**, using H.264 and CRF 18. It records during the existing evaluation
+without an additional policy rollout. Configure this under `learning`:
+
+```yaml
+video_interval_steps: 0
+video_interval_evaluations: 5
+video_width: 1920
+video_height: 1080
+video_crf: 18
+```
+
+The interval counts actual evaluation calls, including a final evaluation. A
+final evaluation outside the cadence does not force a video. If evaluation runs
+every eight updates, an interval of five evaluations records every 40 updates.
+Output paths include the evaluation number and cumulative transition count:
+
+```text
+videos/eval_00005_step_000001310720/policy.mp4
+videos/eval_00010_step_000002621440/policy.mp4
+```
+
+Override the interval for a new run or resume with
+`--video-interval-evaluations 5`. Use `--video-interval-evaluations 0` to disable
+automatic recording. This flag also enables the feature for custom YAML files
+created before the option existed: omitted values use the dataclass default of
+zero. Automatic recording requires FFmpeg on `PATH` and a working MuJoCo
+offscreen renderer (normally EGL on headless Linux). Missing FFmpeg is detected
+before training starts.
 
 ## Evaluation and policy demos
 
@@ -444,7 +492,10 @@ Resume training with a larger cumulative transition budget and a new directory:
 Resume restores simulation settings, agent count, task/randomization settings,
 network and optimizer state, input normalization, and RNG state. The CLI accepts
 a new cumulative `total_steps`; do not pass configuration or simulation overrides
-alongside `--resume`.
+alongside `--resume`. The video cadence can be changed with
+`--video-interval-evaluations`. New checkpoints preserve the completed evaluation
+count, so video scheduling continues after resume. Checkpoints created before
+evaluation counters were added remain readable and start the counter at zero.
 
 Checkpoints contain their XML snapshot and SHA-256 hash. Editing
 `assets/arena.xml` affects new runs and previews; evaluation and resume retain
@@ -460,10 +511,12 @@ runs/<run-name>/
 ├── environment.yaml             # Environment configuration snapshot
 ├── training.yaml                # Simulation and learning configuration snapshot
 ├── episodes.jsonl               # Completed episodes and task diagnostics
-├── updates.jsonl                # PPO losses, gradients, KL, and throughput
+├── updates.jsonl                # PPO losses, gradients, KL, throughput, and ETA
 ├── evaluations.jsonl            # Periodic evaluation results
 ├── evaluation_best.json         # Best evaluation results
 ├── evaluation_latest.json       # Most recent evaluation results
+├── videos/                      # First-episode videos at the configured cadence
+│   └── eval_00005_step_<steps>/policy.mp4
 └── checkpoints/
     ├── best.pt                   # Policy selected by evaluation score
     └── latest.pt                 # Most recently saved training state
@@ -472,7 +525,8 @@ runs/<run-name>/
 Best-policy selection prioritizes higher success rate, then shorter mean
 completion time among successes, then higher mean return. Checkpoints also store
 actor/critic optimizers, normalization statistics, Torch/CUDA RNG, minibatch RNG,
-and per-world spawn RNG.
+per-world spawn RNG, and the completed evaluation count. Evaluation reports
+contain the video path and encoding metadata when recording is scheduled.
 
 ## Tests and numerical validation
 
@@ -560,7 +614,7 @@ checkpointing are excluded; complete training can therefore be slower than
   continue. Contact/constraint overflow requires increasing `nconmax`/`njmax`.
 - MJWarp does not expose every C MuJoCo warning counter through an identical API.
 - Physics, task computation, and reset are not captured in a combined CUDA graph.
-- Automatic training videos and TensorBoard logging are not implemented.
+- TensorBoard logging is not implemented; metrics are written to JSONL.
 - The project supplies tests and benchmarks; learning quality and GPU throughput
   still require experiments on the chosen arena and hardware.
 

@@ -37,6 +37,7 @@ class MAPPOConfig:
     eval_episodes: int = 10
     torch_threads: int = 1
     video_interval_steps: int = 100000
+    video_interval_evaluations: int = 0
     video_width: int = 1920
     video_height: int = 1080
     video_crf: int = 18
@@ -55,7 +56,8 @@ class MAPPOConfig:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
         if self.num_minibatches > self.rollout_steps:
             raise ValueError("num_minibatches cannot exceed rollout_steps")
-        for name in ("video_interval_steps", "video_width", "video_height", "video_crf", "reward_log_interval_steps"):
+        for name in ("video_interval_steps", "video_interval_evaluations", "video_width", "video_height",
+                     "video_crf", "reward_log_interval_steps"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")

@@ -2,6 +2,7 @@
 from dataclasses import replace
 from importlib.metadata import version
 from pathlib import Path
+import shutil
 import time
 import torch
 import yaml
@@ -45,6 +46,12 @@ def flush_events(path, events, first_step, num_envs):
     return count
 
 
+def format_duration(seconds):
+    hours, remainder = divmod(max(0, int(seconds)), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def train(run_dir, env_config, simulation, learning, resume=None):
     root = Path(run_dir).resolve()
     if root.exists():
@@ -52,12 +59,14 @@ def train(run_dir, env_config, simulation, learning, resume=None):
     if learning.total_steps % simulation.num_envs:
         raise ValueError("total_steps must be divisible by num_envs (counts team transitions across worlds)")
     if learning.video_interval_steps:
-        raise ValueError("training video is disabled in this backend; use evaluate --video-dir after checkpointing")
+        raise ValueError("set video_interval_steps: 0 and use video_interval_evaluations for training videos")
     if learning.tensorboard:
         raise ValueError("initial backend logs JSONL; set tensorboard: false")
+    if learning.video_interval_evaluations and shutil.which("ffmpeg") is None:
+        raise RuntimeError("Automatic evaluation videos require FFmpeg on PATH; install it or set video_interval_evaluations: 0")
     torch.set_num_threads(learning.torch_threads)
     torch.manual_seed(learning.seed)
-    steps = updates = episodes = 0
+    steps = updates = episodes = evaluations = 0
     best = (-1., -float("inf"), -float("inf"))
     generator = torch.Generator(device=simulation.device).manual_seed(learning.seed)
     from contextlib import ExitStack
@@ -65,14 +74,16 @@ def train(run_dir, env_config, simulation, learning, resume=None):
         payload = None
         if resume:
             agent, env_config, _, payload = stack.enter_context(checkpoint.loaded(resume, simulation, optimizers=True))
-            old_learning = payload["learning"]
-            allowed = {"total_steps", "eval_interval_steps", "eval_episodes", "checkpoint_interval_steps"}
+            old_learning = agent.config.to_dict()
+            allowed = {"total_steps", "eval_interval_steps", "eval_episodes", "checkpoint_interval_steps",
+                       "video_interval_evaluations", "video_width", "video_height", "video_crf"}
             if any(v != old_learning[k] for k, v in learning.to_dict().items() if k not in allowed):
                 raise ValueError("resume preserves optimizer, network, device, seed and rollout settings")
             if simulation.to_dict() != payload["simulation"]:
                 raise ValueError("resume preserves simulation backend, world count and contact allocation")
             agent.config = learning
             steps, updates, best = payload["steps"], payload["updates"], tuple(payload["best_score"])
+            evaluations = payload.get("evaluations", 0)
             if learning.total_steps <= steps:
                 raise ValueError("resume budget must exceed saved cumulative steps")
         env = BatchedEnvironment(env_config, simulation, learning.seed)
@@ -101,7 +112,8 @@ def train(run_dir, env_config, simulation, learning, resume=None):
                    dimensions=env.dimensions, simulation=simulation.to_dict(), learning=learning.to_dict(),
                    environment=env_config.to_dict(), software=software))
         def save(name):
-            checkpoint.save(root/"checkpoints"/name, agent, env, simulation, steps, updates, best, generator)
+            checkpoint.save(root/"checkpoints"/name, agent, env, simulation, steps, updates, best, generator,
+                            evaluations=evaluations)
         save("latest.pt")
         next_eval = (steps//learning.eval_interval_steps+1)*learning.eval_interval_steps
         next_checkpoint = (steps//learning.checkpoint_interval_steps+1)*learning.checkpoint_interval_steps
@@ -115,17 +127,18 @@ def train(run_dir, env_config, simulation, learning, resume=None):
             steps += length*simulation.num_envs
             updates += 1
             episodes += flush_events(root/"episodes.jsonl", events, first_step, simulation.num_envs)
-            elapsed = time.perf_counter()-started
-            append_jsonl(root/"updates.jsonl", dict(environment_steps=steps, update=updates,
-                         episodes_this_run=episodes, wall_seconds=elapsed,
-                         environment_transitions_per_second=(steps-initial_steps)/elapsed, **metrics))
-            print(f"steps={steps}/{learning.total_steps} update={updates} "
-                  f"transitions/s={(steps-initial_steps)/elapsed:.1f}", flush=True)
             final = steps == learning.total_steps
             if steps >= next_eval or final:
                 # Evaluation is deterministic and uses a separate spawn RNG.
-                result = evaluate(agent, env_config, simulation, learning.eval_episodes, seed=1000000)
+                evaluations += 1
+                video_dir = None
+                if learning.video_interval_evaluations and evaluations % learning.video_interval_evaluations == 0:
+                    video_dir = root/"videos"/f"eval_{evaluations:05d}_step_{steps:012d}"
+                print(f"evaluation={evaluations} steps={steps} record_video={video_dir is not None}", flush=True)
+                result = evaluate(agent, env_config, simulation, learning.eval_episodes, seed=1000000,
+                                  video_dir=video_dir)
                 result["environment_steps"] = steps
+                result["evaluation"] = evaluations
                 s = result["summary"]
                 score = (s["success_rate"], -s["mean_completion_time_s"] if s["mean_completion_time_s"] is not None
                          else -float("inf"), s["mean_return"])
@@ -137,8 +150,19 @@ def train(run_dir, env_config, simulation, learning, resume=None):
                 write_json(root/"evaluation_latest.json", result)
                 append_jsonl(root/"evaluations.jsonl", result)
                 print(f"evaluation success={s['success_rate']:.1%} completion={s['mean_completion_time_s']}", flush=True)
+                if result["video"] is not None:
+                    print(f"video={result['video']['path']}", flush=True)
                 next_eval = (steps//learning.eval_interval_steps+1)*learning.eval_interval_steps
             if steps >= next_checkpoint or final:
                 save("latest.pt")
                 next_checkpoint = (steps//learning.checkpoint_interval_steps+1)*learning.checkpoint_interval_steps
+            # Include completed evaluations, video encoding, and checkpoint writes in throughput and ETA.
+            elapsed = time.perf_counter()-started
+            throughput = (steps-initial_steps)/elapsed
+            eta = (learning.total_steps-steps)/throughput
+            append_jsonl(root/"updates.jsonl", dict(environment_steps=steps, update=updates,
+                         episodes_this_run=episodes, wall_seconds=elapsed, eta_seconds=eta,
+                         environment_transitions_per_second=throughput, **metrics))
+            print(f"steps={steps}/{learning.total_steps} update={updates} "
+                  f"transitions/s={throughput:.1f} ETA={format_duration(eta)}", flush=True)
         return dict(environment_steps=steps, updates=updates, best_success_rate=best[0])
