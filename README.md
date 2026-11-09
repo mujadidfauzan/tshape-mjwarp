@@ -71,7 +71,9 @@ flowchart TD
   to CPU. `mjwarp` with `--device cpu` is also available for diagnostic runs.
 - **`environment.py`** provides a dense tensor API across all worlds. It tracks
   episode state, returns terminal features before reset, and supports masked
-  resets without restarting healthy worlds.
+  resets without restarting healthy worlds. Empty reset masks skip sampling and
+  physics forwarding; detecting an empty CUDA mask requires one host scalar read
+  and stream synchronization, whose performance impact depends on the workload.
 - **`task.py`** computes geometry, observations, team state, doorway-aware
   distances, rewards, and boundary penetration using PyTorch tensors.
 - **`spawning.py`** samples valid layouts with independent RNG state per world.
@@ -188,6 +190,8 @@ not propagate across the reset into a new episode.
 ├── tests/
 │   ├── test_task.py              # Features, spawning, reset, success/failure
 │   ├── test_rollout.py           # GAE and policy update behavior
+│   ├── test_physics.py           # Non-finite substep rollback and path metrics
+│   ├── test_validation.py        # Validation inputs, stability, and termination
 │   ├── test_checkpoint.py        # Training, resume, evaluation, video, benchmark
 │   ├── test_warp_cpu.py          # Optional MJWarp CPU integration tests
 │   └── test_gpu.py               # Optional CUDA integration tests
@@ -355,6 +359,10 @@ sizes, and evaluation/checkpoint intervals. Run with:
 agents, this supplies 4,096 actor samples. Changing rollout length also changes
 the temporal span used by GAE, even if total batch size stays constant.
 
+Programmatic calls to `MAPPO(..., config=None)` or `load_mappo_config()` use
+`MAPPOConfig` dataclass defaults without reading a YAML file. The CLI loads the
+supplied training YAML; its overrides, including logging settings, remain active.
+
 The supplied training configuration evaluates 20 episodes and saves checkpoints
 at intervals of 10,000 team transitions, checked after each rollout/update, and
 at the end of training. Keep `tensorboard: false` and `video_interval_steps: 0`;
@@ -496,7 +504,10 @@ Compare initial features and a short trajectory against the CPU environment:
 ```
 
 Validation copies the first world's initial state into the CPU environment and
-applies matching actions. It checks numerical agreement within tolerances;
+applies matching actions. It requires a positive step count and finite, positive
+tolerance, reports stability for the batched worlds and CPU reference, and fails
+if either simulator reports a physics failure. Validation stops when any tested
+world ends. It checks numerical agreement within tolerances;
 it does not establish bitwise equivalence, long-horizon agreement, or policy
 learning performance. Skipped GPU tests are not evidence of a GPU pass.
 
@@ -526,7 +537,15 @@ Run comparisons without competing GPU workloads. Benchmark reports distinguish:
 - `torch_peak_allocated_mib`: PyTorch allocations only, excluding Warp allocations.
 - `device_free_mib`: overall free GPU memory, also affected by other processes.
 
-Warm-up is excluded from timing. Rendering, evaluation, and disk logging or
+Warm-up is excluded from timing and uses the selected execution path. With
+`--with-updates`, it includes collection, backward passes, and optimizer steps,
+and rounds a positive warm-up count up to complete rollout batches (bounded by
+the measured step count per batch). The report records both
+`requested_warmup_steps` and the actual `warmup_steps`. `--warmup 0` disables
+warm-up. Compilation triggered only by later contacts can still occur during
+measurement. Benchmarking uses `learning.torch_threads`, matching training.
+
+Rendering, evaluation, and disk logging or
 checkpointing are excluded; complete training can therefore be slower than
 `--with-updates` results. Failures and out-of-memory errors are reported as
 `status: error`. GPU speedups must be measured on the target hardware.

@@ -34,6 +34,10 @@ class BatchedEnvironment:
             mask = torch.ones_like(self.done)
         else:
             mask = mask.clone()
+            # One host decision avoids sampling and forwarding every world for a no-op.
+            # On CUDA, reading this scalar synchronizes the current stream.
+            if not mask.any().item():
+                return self.observations, self.states
         qpos = self.sampler.sample(mask)
         self.physics.reset(mask, qpos)
         self.initial_qpos.copy_(torch.where(mask[:, None], qpos, self.initial_qpos))

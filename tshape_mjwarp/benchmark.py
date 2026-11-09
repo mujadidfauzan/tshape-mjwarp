@@ -13,11 +13,16 @@ from .trainer import collect
 def benchmark(config, simulation, learning, counts, warmup=10, steps=100, with_updates=False):
     if warmup < 0 or steps < 1:
         raise ValueError("warmup must be nonnegative and steps positive")
+    torch.set_num_threads(learning.torch_threads)
+    rollout_steps = min(learning.rollout_steps, steps)
+    warmup_steps = warmup
+    if with_updates and warmup:
+        # Use complete rollout batches to initialize backward/Adam with measured shapes.
+        warmup_steps = ((warmup + rollout_steps - 1)//rollout_steps)*rollout_steps
     results = []
     for count in counts:
         sim = replace(simulation, num_envs=count)
         env = None
-        buffer = None
         try:
             torch.manual_seed(learning.seed)
             env = BatchedEnvironment(config, sim, learning.seed)
@@ -26,32 +31,32 @@ def benchmark(config, simulation, learning, counts, warmup=10, steps=100, with_u
             def sync():
                 if env.device.type == "cuda":
                     torch.cuda.synchronize(env.device)
-            for _ in range(warmup):
-                actions, _, _ = agent.act(env.observations)
-                _, _, _, term, trunc, _ = env.step(actions)
-                env.reset(term | trunc)
+            def run_steps(total):
+                remaining = total
+                while remaining:
+                    length = min(rollout_steps, remaining)
+                    if with_updates:
+                        buffer = RolloutBuffer(length, count, env.dimensions, env.device)
+                        collect(agent, env, buffer)
+                        agent.update(buffer, generator)
+                    else:
+                        for _ in range(length):
+                            actions, _, _ = agent.act(env.observations)
+                            _, _, _, term, trunc, _ = env.step(actions)
+                            env.reset(term | trunc)
+                    remaining -= length
+            run_steps(warmup_steps)
             sync()
             if env.device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(env.device)
             started = time.perf_counter()
-            remaining = steps
-            while remaining:
-                length = min(learning.rollout_steps, remaining)
-                if with_updates:
-                    buffer = RolloutBuffer(length, count, env.dimensions, env.device)
-                    collect(agent, env, buffer)
-                    agent.update(buffer, generator)
-                else:
-                    for _ in range(length):
-                        actions, _, _ = agent.act(env.observations)
-                        _, _, _, term, trunc, _ = env.step(actions)
-                        env.reset(term | trunc)
-                remaining -= length
+            run_steps(steps)
             sync()
             elapsed = time.perf_counter()-started
             gpu = env.device.type == "cuda"
             result = dict(backend=sim.backend, device=sim.device, num_envs=count, status="ok",
-                          control_steps_per_world=steps, warmup_steps=warmup, wall_seconds=elapsed,
+                          control_steps_per_world=steps, warmup_steps=warmup_steps,
+                          requested_warmup_steps=warmup, torch_threads=learning.torch_threads, wall_seconds=elapsed,
                           includes_ppo=with_updates, environment_transitions_per_second=steps*count/elapsed,
                           nominal_physics_substeps_per_second=steps*count*config.frame_skip/elapsed,
                           torch_peak_allocated_mib=torch.cuda.max_memory_allocated(env.device)/2**20 if gpu else None,
@@ -67,7 +72,6 @@ def benchmark(config, simulation, learning, counts, warmup=10, steps=100, with_u
             if env is not None:
                 env.close()
             env = None
-            buffer = None
             if "agent" in locals():
                 del agent
             gc.collect()

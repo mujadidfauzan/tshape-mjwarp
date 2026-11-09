@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import shutil
 import unittest
+from unittest.mock import patch
 import torch
 
 from tshape_mjwarp.config import environment_config, SimulationConfig
@@ -59,3 +60,36 @@ class IntegrationTests(unittest.TestCase):
         result = benchmark(environment_config(max_steps=2), sim, cfg, [1, 2], warmup=0, steps=2, with_updates=True)
         self.assertTrue(all(row["status"] == "ok" for row in result), result)
         self.assertTrue(all(row["backend"] == "reference" and row["includes_ppo"] for row in result))
+
+    def test_benchmark_warms_ppo_before_timing_and_uses_training_threads(self):
+        from tshape_mjwarp.mappo import MAPPO
+
+        updates, timer_updates = [], []
+        test = self
+        class TrackingMAPPO(MAPPO):
+            def update(self, buffer, rng):
+                result = super().update(buffer, rng)
+                test.assertTrue(self.actor_optimizer.state)
+                test.assertTrue(self.critic_optimizer.state)
+                updates.append((buffer.size, torch.get_num_threads()))
+                return result
+
+        def clock():
+            timer_updates.append(len(updates))
+            return float(len(timer_updates))
+
+        sim = SimulationConfig(backend="reference", device="cpu", num_envs=1)
+        cfg = MAPPOConfig(rollout_steps=2, ppo_epochs=1, actor_hidden_size=8,
+                          critic_hidden_size=8, torch_threads=1)
+        torch.set_num_threads(2)
+        with patch("tshape_mjwarp.benchmark.MAPPO", TrackingMAPPO), \
+             patch("tshape_mjwarp.benchmark.time.perf_counter", side_effect=clock):
+            results = benchmark(environment_config(max_steps=2), sim, cfg, [1],
+                                warmup=1, steps=3, with_updates=True)
+        self.assertEqual(results[0]["status"], "ok", results)
+        self.assertEqual(updates, [(2, 1), (2, 1), (1, 1)])
+        self.assertEqual(timer_updates, [1, 3])
+        self.assertEqual(results[0]["warmup_steps"], 2)
+        self.assertEqual(results[0]["requested_warmup_steps"], 1)
+        self.assertEqual(results[0]["torch_threads"], 1)
+        self.assertEqual(results[0]["environment_transitions_per_second"], 3.)

@@ -2,10 +2,18 @@ import unittest
 import torch
 from tshape_mjwarp.rollout import compute_gae, RolloutBuffer
 from tshape_mjwarp.mappo import MAPPO
-from tshape_mjwarp.training_config import MAPPOConfig
+from tshape_mjwarp.training_config import MAPPOConfig, load_mappo_config
 
 
 class RolloutTests(unittest.TestCase):
+    def test_default_agent_config_needs_no_yaml_file(self):
+        torch.set_num_threads(1)
+        self.assertEqual(load_mappo_config(), MAPPOConfig())
+        self.assertEqual(load_mappo_config(actor_hidden_size=8).actor_hidden_size, 8)
+        agent = MAPPO(3, 5, num_agents=4)
+        actions, _, _ = agent.act(torch.zeros(2, 4, 3))
+        self.assertEqual(actions.shape, (2, 4, 2))
+
     def test_gae_separates_worlds_and_timeouts(self):
         rewards = torch.tensor([[1., 10.], [100., 20.]])
         values = torch.zeros_like(rewards)

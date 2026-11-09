@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from itertools import product
 import numpy as np
 import torch
@@ -53,6 +54,25 @@ class TaskTests(unittest.TestCase):
         env.reset(env.done)
         self.assertFalse(torch.equal(final_state, env.states))
         self.assertFalse(env.steps.any())
+
+    def test_empty_reset_skips_sampling_and_physics(self):
+        env = BatchedEnvironment(self.cfg, self.sim)
+        try:
+            env.step(torch.zeros(3, 4, 2))
+            before = [value.clone() for value in (env.physics.qpos, env.physics.qvel,
+                      env.observations, env.states, env.steps, env.returns, env.sampler.rng)]
+            with patch.object(env.sampler, "sample") as sample, patch.object(env.physics, "reset") as reset:
+                observations, states = env.reset(torch.zeros(3, dtype=torch.bool))
+                sample.assert_not_called()
+                reset.assert_not_called()
+            self.assertIs(observations, env.observations)
+            self.assertIs(states, env.states)
+            after = (env.physics.qpos, env.physics.qvel, env.observations, env.states,
+                     env.steps, env.returns, env.sampler.rng)
+            for expected, actual in zip(before, after):
+                torch.testing.assert_close(actual, expected)
+        finally:
+            env.close()
 
     def test_success_uses_whole_footprint_and_failure_wins(self):
         env = BatchedEnvironment(self.cfg, self.sim)

@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 import torch
 from tshape_mjwarp.config import environment_config, SimulationConfig
 
@@ -57,5 +58,19 @@ class GpuTests(unittest.TestCase):
             env.reset(term)
             torch.testing.assert_close(env.physics.qpos[1], state)
             torch.testing.assert_close(env.sampler.rng[1], rng)
+        finally:
+            env.close()
+
+    def test_gpu_empty_reset_skips_sampling_and_forward(self):
+        from tshape_mjwarp.environment import BatchedEnvironment
+        env = BatchedEnvironment(environment_config(), SimulationConfig(num_envs=2))
+        try:
+            rng, qpos = env.sampler.rng.clone(), env.physics.qpos.clone()
+            with patch.object(env.sampler, "sample") as sample, patch.object(env.physics, "reset") as reset:
+                env.reset(torch.zeros(2, dtype=torch.bool, device=env.device))
+                sample.assert_not_called()
+                reset.assert_not_called()
+            torch.testing.assert_close(env.sampler.rng, rng)
+            torch.testing.assert_close(env.physics.qpos, qpos)
         finally:
             env.close()

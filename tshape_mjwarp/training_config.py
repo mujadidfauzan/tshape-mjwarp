@@ -8,9 +8,6 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PATH = ROOT / "configs" / "mappo.yaml"
-
 
 @dataclass(frozen=True)
 class MAPPOConfig:
@@ -100,11 +97,11 @@ class MAPPOConfig:
 
 
 def load_mappo_config(config=None, **overrides):
-    if isinstance(config, MAPPOConfig):
+    if config is None:
+        result = MAPPOConfig()
+    elif isinstance(config, MAPPOConfig):
         result = config
     else:
-        if config is None:
-            config = DEFAULT_PATH
         if isinstance(config, (str, Path)):
             with Path(config).open(encoding="utf-8") as stream:
                 config = yaml.safe_load(stream)
