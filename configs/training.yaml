@@ -1,0 +1,33 @@
+simulation:
+  backend: mjwarp
+  device: cuda:0
+  num_envs: 32
+  nconmax: 256
+  njmax: 1024
+learning:
+  seed: 42
+  total_steps: 100000
+  rollout_steps: 32
+  ppo_epochs: 5
+  num_minibatches: 1
+  actor_hidden_size: 128
+  critic_hidden_size: 256
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_ratio: 0.2
+  value_clip: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  initial_log_std: -0.5
+  normalize_inputs: true
+  normalization_clip: 10.0
+  torch_threads: 1
+  eval_interval_steps: 10000
+  eval_episodes: 20
+  checkpoint_interval_steps: 10000
+  video_interval_steps: 0
+  tensorboard: false

@@ -1,0 +1,9 @@
+# Isolated environment only. MuJoCo and MJWarp are a matched API pair.
+mujoco==3.5.0
+mujoco-warp==3.5.0
+warp-lang==1.11.0
+numpy==1.26.4
+PyYAML==6.0.3
+gymnasium==1.4.0
+pettingzoo==1.27.0
+torch==2.6.0

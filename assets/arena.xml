@@ -1,0 +1,114 @@
+<mujoco model="tshape_medium_narrow_doorway">
+    <compiler angle="radian"/>
+
+    <!-- Idealized planar dynamics: fixed height, no gravity or floor load.
+         Object joints combine viscous damping with load-independent dry
+         friction. This approximates support resistance without floor contact. -->
+    <!-- Small agents need finer contact integration during force exploration.
+         Environment decisions still span 50 ms through frame_skip=50. -->
+    <option timestep="0.001" gravity="0 0 0"
+            integrator="implicitfast" iterations="50"/>
+
+    <default>
+        <geom condim="3" friction="0.8 0 0"
+              solref="0.002 1" solimp="0.9 0.95 0.001"/>
+        <motor gear="1" ctrllimited="true" ctrlrange="-3 3"/>
+        <default class="agent">
+            <joint type="slide" damping="1"/>
+            <!-- Radius 3 cm, height 6 cm. Mass remains a simulation parameter. -->
+            <geom type="cylinder" size="0.03 0.03" mass="0.25"/>
+        </default>
+    </default>
+
+    <visual>
+        <global offwidth="1280" offheight="720"/>
+    </visual>
+
+    <worldbody>
+        <light name="main_light" pos="0 0 8" dir="0 0 -1"/>
+        <camera name="top_view" pos="0 0 9"
+                xyaxes="1 0 0 0 1 0" mode="fixed"/>
+
+        <!-- Visual only. All moving bodies have a fixed 1 cm floor clearance. -->
+        <geom name="floor" type="plane" pos="0 0 0" size="5 5 0.1"
+              contype="0" conaffinity="0" rgba="0.88 0.90 0.93 1"/>
+
+        <!-- Inner arena bounds: [-2.9, 2.9] m on both axes. -->
+        <geom name="wall_left" type="box" pos="-3 0 0.25"
+              size="0.1 3 0.25" rgba="0.35 0.40 0.48 1"/>
+        <geom name="wall_right" type="box" pos="3 0 0.25"
+              size="0.1 3 0.25" rgba="0.35 0.40 0.48 1"/>
+        <geom name="wall_top" type="box" pos="0 3 0.25"
+              size="3.1 0.1 0.25" rgba="0.35 0.40 0.48 1"/>
+        <geom name="wall_bottom" type="box" pos="0 -3 0.25"
+              size="3.1 0.1 0.25" rgba="0.35 0.40 0.48 1"/>
+
+        <!-- One 0.5 m opening at Y=0; the 0.03 m thick partition joins both outer walls. -->
+        <geom name="obstacle_lower" type="box" pos="0 -1.675 0.25"
+              size="0.015 1.425 0.25" rgba="0.35 0.40 0.48 1"/>
+        <geom name="obstacle_upper" type="box" pos="0 1.675 0.25"
+              size="0.015 1.425 0.25" rgba="0.35 0.40 0.48 1"/>
+
+        <!-- Visual marker; Medium success uses full-object crossing, not containment. -->
+        <site name="goal" type="box" pos="1.5 0 0.004"
+              size="0.75 0.65 0.003" rgba="0.1 0.9 0.2 0.2"/>
+
+        <!-- Photo-inspired asymmetric double crossbar: 1.2 m along Y,
+             0.6 m across the large end and 0.3 m across the small end.
+             Three boxes form one rigid body without overlapping volumes.
+             Equal end-bar masses keep the center of mass at the body origin.
+             Dimensions are a visual approximation, not measured source data. -->
+        <body name="t_shape" pos="-1.5 0 0.11">
+            <!-- Preserve the user's tuned planar resistance:
+                 XY damping 4 N*s/m and dry friction 1.5 N per axis;
+                 yaw damping 0.8 N*m*s/rad and dry friction 0.16 N*m. -->
+            <joint name="t_x" type="slide" axis="1 0 0"
+                   damping="4" frictionloss="1.5"/>
+            <joint name="t_y" type="slide" axis="0 1 0"
+                   damping="4" frictionloss="1.5"/>
+            <joint name="t_yaw" type="hinge" axis="0 0 1"
+                   damping="0.8" frictionloss="0.16"/>
+            <geom name="t_horizontal" type="box" pos="0 0.56 0"
+                  size="0.30 0.04 0.10" mass="0.5" rgba="0.95 0.45 0.08 1"/>
+            <geom name="t_vertical" type="box" pos="0 0 0"
+                  size="0.04 0.52 0.10" mass="1" rgba="0.95 0.45 0.08 1"/>
+            <geom name="t_bottom" type="box" pos="0 -0.56 0"
+                  size="0.15 0.04 0.10" mass="0.5" rgba="0.95 0.45 0.08 1"/>
+        </body>
+
+        <!-- Two agents below the large bar, two left of the stem; 4 cm gaps. -->
+        <body name="agent_0" pos="-1.68 0.45 0.04" childclass="agent">
+            <joint name="agent_0_x" axis="1 0 0"/>
+            <joint name="agent_0_y" axis="0 1 0"/>
+            <geom name="agent_0_geom" rgba="0.1 0.65 0.25 1"/>
+        </body>
+        <body name="agent_1" pos="-1.32 0.45 0.04" childclass="agent">
+            <joint name="agent_1_x" axis="1 0 0"/>
+            <joint name="agent_1_y" axis="0 1 0"/>
+            <geom name="agent_1_geom" rgba="0.15 0.45 0.9 1"/>
+        </body>
+        <body name="agent_2" pos="-1.61 -0.26 0.04" childclass="agent">
+            <joint name="agent_2_x" axis="1 0 0"/>
+            <joint name="agent_2_y" axis="0 1 0"/>
+            <geom name="agent_2_geom" rgba="0.65 0.2 0.8 1"/>
+        </body>
+        <body name="agent_3" pos="-1.61 0.26 0.04" childclass="agent">
+            <joint name="agent_3_x" axis="1 0 0"/>
+            <joint name="agent_3_y" axis="0 1 0"/>
+            <geom name="agent_3_geom" rgba="0.9 0.2 0.2 1"/>
+        </body>
+    </worldbody>
+
+    <!-- Controls are forces in N per axis; maximum vector magnitude is
+         sqrt(2)*3 N, not 3 N. The diagnostics read these limits by name. -->
+    <actuator>
+        <motor name="agent_0_fx" joint="agent_0_x"/>
+        <motor name="agent_0_fy" joint="agent_0_y"/>
+        <motor name="agent_1_fx" joint="agent_1_x"/>
+        <motor name="agent_1_fy" joint="agent_1_y"/>
+        <motor name="agent_2_fx" joint="agent_2_x"/>
+        <motor name="agent_2_fy" joint="agent_2_y"/>
+        <motor name="agent_3_fx" joint="agent_3_x"/>
+        <motor name="agent_3_fy" joint="agent_3_y"/>
+    </actuator>
+</mujoco>
