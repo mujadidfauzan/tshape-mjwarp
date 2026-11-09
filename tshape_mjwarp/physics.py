@@ -62,6 +62,7 @@ class WarpPhysics:
         self.device = torch.device(simulation.device)
         if self.device.type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA unavailable; run check on the remote GPU PC or explicitly use reference/cpu")
+        wp.init()
         self.cpu = oracle(config)
         with self.scope():
             self.model = mjw.put_model(self.cpu.model)

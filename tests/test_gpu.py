@@ -1,5 +1,7 @@
 """Explicit opt-in GPU tests. Opting in without CUDA fails instead of pretending to pass."""
 import os
+import subprocess
+import sys
 import unittest
 import torch
 from tshape_mjwarp.config import environment_config, SimulationConfig
@@ -16,6 +18,15 @@ class GpuTests(unittest.TestCase):
         from tshape_mjwarp.validation import validate
         result = validate(environment_config(), SimulationConfig(num_envs=2), steps=5)
         self.assertTrue(result["passed"], result)
+
+    def test_gpu_cli_validate_in_fresh_process(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "tshape_mjwarp.cli", "validate",
+             "--backend", "mjwarp", "--device", "cuda:0",
+             "--num-envs", "2", "--num-agents", "8"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_gpu_training_and_checkpoint(self):
         from dataclasses import replace
